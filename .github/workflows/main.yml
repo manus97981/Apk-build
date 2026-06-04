@@ -22,10 +22,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Accept all licenses
+      - name: Accept licenses and install tools
         run: |
           yes | sdkmanager --licenses
-          sdkmanager "build-tools;34.0.0" "platforms;android-33" "ndk;25.2.9519653"
+          sdkmanager "build-tools;33.0.2" "platforms;android-33" "ndk;25.2.9519653"
 
       - name: Install dependencies
         run: |
@@ -33,11 +33,19 @@ jobs:
           sudo apt install -y zip unzip git libtool libtool-bin m4 automake autoconf cmake pkg-config libffi-dev libssl-dev zlib1g-dev
           pip install buildozer cython==0.29.37
 
+      - name: Configure buildozer to use system SDK
+        run: |
+          cat >> buildozer.spec << EOF
+          android.sdk_path = $ANDROID_HOME
+          android.ndk_path = $ANDROID_HOME/ndk/25.2.9519653
+          android.ant_path = /usr/bin
+          EOF
+          sed -i 's/android.api = .*/android.api = 33/' buildozer.spec
+          sed -i 's/android.ndk = .*/android.ndk = 25.2.9519653/' buildozer.spec
+
       - name: Build APK
         run: |
-          export ANDROID_SDK_ROOT=$ANDROID_HOME
-          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653
-          buildozer android debug
+          buildozer android debug 2>&1
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
