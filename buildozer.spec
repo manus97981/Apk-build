@@ -10,7 +10,7 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,json,txt
 
 version = 1.0
 
-requirements = python3,kivy==2.2.1,kivymd==1.1.1
+requirements = python3,kivy,kivymd
 
 orientation = portrait
 fullscreen = 0
@@ -29,8 +29,6 @@ android.copy_libs = 1
 android.logcat_filters = *:S python:D
 
 android.accept_sdk_license = True
-
-p4a.branch = master
 
 [buildozer]
 
