@@ -30,6 +30,11 @@ jobs:
             libffi-dev libssl-dev \
             zlib1g-dev
 
+      - name: Accept Android licenses
+        run: |
+          yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;37.0.0" || true
+
       - name: Install Python packages
         run: |
           pip install buildozer cython==0.29.37 kivy
