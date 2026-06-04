@@ -10,7 +10,7 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,json,txt
 
 version = 1.0
 
-requirements = python3==3.10.13,kivy==2.2.1,kivymd==1.1.1
+requirements = python3,kivy==2.2.1,kivymd==1.1.1
 
 orientation = portrait
 fullscreen = 0
@@ -18,7 +18,6 @@ fullscreen = 0
 android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
 
 android.api = 33
-android.sdk = 33
 android.minapi = 21
 android.ndk = 25b
 
