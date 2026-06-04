@@ -1,64 +1,57 @@
 name: Build PrimeShani APK
 
+
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+workflow_dispatch:
+push:
+branches:
+- main
+
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+build:
+runs-on: ubuntu-22.04
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip python3-virtualenv autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake autopoint gettext
-          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-          sudo update-alternatives --set javac /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
+steps:
+  - uses: actions/checkout@v4
 
-      - name: Install Python packages
-        run: |
-          python3 -m pip install --upgrade pip setuptools cython==0.29.33 buildozer
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.11"
 
-      - name: Setup Android SDK manually
-        run: |
-          # Download cmdline-tools
-          mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools
-          cd ~/.buildozer/android/platform/android-sdk/cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          unzip -q commandlinetools-linux-9477386_latest.zip
-          mv cmdline-tools latest
-          export PATH=$PATH:~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin
+  - name: Install dependencies
+    run: |
+      sudo apt update
+      sudo apt install -y \
+        git zip unzip openjdk-17-jdk \
+        autoconf automake libtool pkg-config \
+        zlib1g-dev libncurses5-dev libncursesw5-dev \
+        cmake libffi-dev libssl-dev
 
-          # Accept all licenses
-          mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
-          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-          echo -e "\n33b6a2b64607f11b759f320ef9dff4ae5c47d97a" >> ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
+  - name: Install Buildozer
+    run: |
+      python -m pip install --upgrade pip
+      pip install cython==0.29.33
+      pip install buildozer
 
-          # Install build tools
-          yes | ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/.buildozer/android/platform/android-sdk "build-tools;33.0.2" "platforms;android-33" "tools" || true
+  - name: Accept Android licenses
+    run: |
+      mkdir -p ~/.android
+      touch ~/.android/repositories.cfg
 
-      - name: Pre-accept licenses
-        run: |
-          mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
-          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-          echo -e "\n33b6a2b64607f11b759f320ef9dff4ae5c47d97a" >> ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
-          echo -e "\nd975f751698a77b662f1254ddbeed3901e976f5a" > ~/.buildozer/android/platform/android-sdk/licenses/android-googletv-license
-          echo -e "\n601085b94cd77f0b54ff86406957099ebe79c4d6" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-arm-dbt-license
+  - name: Build APK
+    env:
+      ANDROIDAPI: 33
+      ANDROIDMINAPI: 21
+    run: |
+      buildozer android debug
 
-      - name: Build APK
-        run: |
-          export ANDROIDSDK="$HOME/.buildozer/android/platform/android-sdk"
-          buildozer -v android debug
+  - name: Upload APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: PrimeShani-APK
+      path: bin/*.apk
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PrimeShani-APK
-          path: ./bin/*.apk
+
