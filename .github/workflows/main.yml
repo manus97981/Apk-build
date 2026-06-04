@@ -7,48 +7,31 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept licenses and install tools
+      - name: Install system dependencies
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "build-tools;33.0.2" "platforms;android-33" "ndk;25.2.9519653"
+          sudo apt update
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip python3-virtualenv autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake autopoint gettext
+          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+          sudo update-alternatives --set javac /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
 
-      - name: Install dependencies
+      - name: Install Cython
         run: |
-          sudo apt update -qq
-          sudo apt install -y zip unzip git libtool libtool-bin m4 automake autoconf cmake pkg-config libffi-dev libssl-dev zlib1g-dev
-          pip install buildozer cython==0.29.37
-
-      - name: Configure buildozer to use system SDK
-        run: |
-          cat >> buildozer.spec << EOF
-          android.sdk_path = $ANDROID_HOME
-          android.ndk_path = $ANDROID_HOME/ndk/25.2.9519653
-          android.ant_path = /usr/bin
-          EOF
-          sed -i 's/android.api = .*/android.api = 33/' buildozer.spec
-          sed -i 's/android.ndk = .*/android.ndk = 25.2.9519653/' buildozer.spec
+          python3 -m pip install --upgrade pip setuptools cython==0.29.33
 
       - name: Build APK
-        run: |
-          buildozer android debug 2>&1
+        uses: digreatbrian/buildozer-action@v2
+        with:
+          python-version: 3.8
+          buildozer-cmd: buildozer -v android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PrimeShani-APK
-          path: bin/*.apk
+          path: ./bin/*.apk
