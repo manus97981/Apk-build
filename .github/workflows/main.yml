@@ -19,30 +19,25 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept all licenses
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "build-tools;34.0.0" "platforms;android-33" "ndk;25.2.9519653"
+
       - name: Install dependencies
         run: |
           sudo apt update -qq
           sudo apt install -y zip unzip git libtool libtool-bin m4 automake autoconf cmake pkg-config libffi-dev libssl-dev zlib1g-dev
-
-      - name: Install Python packages
-        run: |
           pip install buildozer cython==0.29.37
-
-      - name: Fix buildozer spec
-        run: |
-          sed -i 's/android.api = 33/android.api = 31/' buildozer.spec
-          sed -i 's/android.ndk = 25b/android.ndk = 23b/' buildozer.spec
-          echo "android.accept_sdk_license = True" >> buildozer.spec
-
-      - name: Accept SDK licenses manually
-        run: |
-          mkdir -p ~/.android
-          echo "count=0" > ~/.android/repositories.cfg
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
 
       - name: Build APK
         run: |
-          buildozer android debug 2>&1
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653
+          buildozer android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
