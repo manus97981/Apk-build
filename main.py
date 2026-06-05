@@ -66,120 +66,86 @@ def _read_file(path):
 
 def detect_device():
     info = {}
-
     # Device name
     brand = _getprop("ro.product.brand") or _getprop("ro.product.vendor.brand")
     model = _getprop("ro.product.model")
-    info["device"] = f"{brand} {model}".strip() if brand else (model or "Unknown")
+    info["device"] = f"{brand} {model}".strip() if brand else (model or platform.node() or "Unknown")
 
-    # Chipset — multiple sources
+    # Chipset from cpuinfo
+    cpuinfo = _read_file("/proc/cpuinfo")
     hw = ""
-    # Try getprop first (most reliable on Android)
-    for prop in ("ro.board.platform", "ro.hardware", "ro.product.board",
-                 "ro.chipname", "ro.mediatek.platform"):
-        hw = _getprop(prop)
-        if hw and hw.lower() not in ("unknown", ""):
+    for line in cpuinfo.splitlines():
+        if "Hardware" in line or "model name" in line or "Processor" in line:
+            hw = line.split(":")[-1].strip()
             break
-    # Try /proc/cpuinfo
     if not hw:
-        for line in _read_file("/proc/cpuinfo").splitlines():
-            if "Hardware" in line or "model name" in line or "Processor" in line:
-                hw = line.split(":")[-1].strip()
-                break
-    # Try ro.soc.model
-    if not hw:
-        hw = _getprop("ro.soc.model") or _getprop("ro.product.vendor.board") or "Unknown"
+        hw = _getprop("ro.hardware") or _getprop("ro.product.board") or "Unknown"
     info["chipset"] = hw
 
-    # RAM from /proc/meminfo
+    # RAM
     try:
-        for ln in _read_file("/proc/meminfo").splitlines():
-            if ln.startswith("MemTotal:"):
-                kb = int(ln.split()[1])
-                info["ram"] = round(kb / (1024 * 1024), 1)
-                break
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for ln in f:
+                if ln.startswith("MemTotal:"):
+                    info["ram"] = round(int(ln.split()[1]) / (1024*1024), 1)
+                    break
     except:
-        info["ram"] = 4.0
-    if not info.get("ram"):
-        info["ram"] = 4.0
+        info["ram"] = 0.0
 
-    # Screen resolution — wm size first, then Window
+    # Screen
     try:
-        wm = subprocess.run(["wm", "size"], capture_output=True, text=True, timeout=4).stdout
+        wm = subprocess.run(["wm","size"], capture_output=True, text=True, timeout=4).stdout
         m = re.search(r"(\d{3,4})x(\d{3,4})", wm)
-        info["w"] = int(m.group(1)) if m else int(Window.width)
-        info["h"] = int(m.group(2)) if m else int(Window.height)
+        if m:
+            info["w"], info["h"] = int(m.group(1)), int(m.group(2))
+        else:
+            info["w"], info["h"] = int(Window.width), int(Window.height)
     except:
-        info["w"] = int(Window.width)
-        info["h"] = int(Window.height)
+        info["w"], info["h"] = int(Window.width), int(Window.height)
 
-    # DPI
     try:
-        dn = subprocess.run(["wm", "density"], capture_output=True, text=True, timeout=4).stdout
-        m2 = re.search(r"(\d+)", dn)
+        dn = subprocess.run(["wm","density"], capture_output=True, text=True, timeout=4).stdout
+        m2 = re.search(r"(\d+)\s*dpi", dn, re.I)
         info["dpi"] = int(m2.group(1)) if m2 else 400
     except:
         info["dpi"] = 400
 
-    # Refresh rate — multiple paths
+    # Refresh rate
     hz = 60
-    paths_hz = [
-        "/sys/class/graphics/fb0/mode",
-        "/sys/class/drm/sde-crtc-0/mode",
-        "/sys/class/drm/card0-DSI-1/modes",
-        "/sys/kernel/gpu/gpu_clock",
-    ]
-    for path in paths_hz:
-        txt = _read_file(path)
+    for path in ("/sys/class/graphics/fb0/mode", "/sys/class/drm/sde-crtc-0/mode"):
+        txt = _read_file(path).lower()
         for r in (144, 120, 90):
             if str(r) in txt:
                 hz = r
                 break
         if hz != 60:
             break
-    # Also try getprop
-    if hz == 60:
-        fps_prop = _getprop("ro.surface_flinger.max_frame_buffer_acquired_buffers")
-        if fps_prop in ("3", "4"):
-            hz = 120
     info["hz"] = hz
 
-    # Touch sampling rate
+    # Touch sampling
     touch = 0
-    for i in range(6):
-        v = _read_file(f"/sys/class/input/input{i}/sampling_rate")
+    for path in ("/sys/class/input/input0/sampling_rate", "/sys/class/input/input1/sampling_rate"):
         try:
-            touch = int(float(v))
-            if touch > 0:
+            touch = int(float(_read_file(path)))
+            break
+        except:
+            pass
+    info["touch"] = touch or 120
+
+    # Battery - read directly from sys fs
+    batt = 80
+    for node in ("battery", "Battery", "BAT0", "BAT1", "bms"):
+        try:
+            v = _read_file(f"/sys/class/power_supply/{node}/capacity")
+            b = int(v.strip())
+            if 1 <= b <= 100:
+                batt = b
                 break
         except:
             pass
-    info["touch"] = touch if touch > 0 else 120
+    info["battery"] = batt
 
-    # Battery — multiple methods
-    batt = 0
-    # Method 1: /sys/class/power_supply
-    for node in ("battery", "Battery", "BAT0", "BAT1"):
-        v = _read_file(f"/sys/class/power_supply/{node}/capacity")
-        try:
-            batt = int(v)
-            if 0 < batt <= 100:
-                break
-        except:
-            pass
-    # Method 2: dumpsys battery
-    if not (0 < batt <= 100):
-        try:
-            ds = subprocess.run(["dumpsys", "battery"],
-                                capture_output=True, text=True, timeout=5).stdout
-            m3 = re.search(r"level:\s*(\d+)", ds)
-            if m3:
-                batt = int(m3.group(1))
-        except:
-            pass
-    info["battery"] = batt if (0 < batt <= 100) else 80
-
-    # System load
+    # Load
     try:
         info["load"] = round(os.getloadavg()[0], 2)
     except:
@@ -197,31 +163,19 @@ def get_tier(chip):
     return best
 
 def benchmark():
+    # CPU only — no memory alloc to avoid Android crash
     try:
         st = time.perf_counter()
         n, ops = 123456789, 0
-        deadline = st + 1.2
+        deadline = st + 0.8
         while time.perf_counter() < deadline:
             n = (n * 1103515245 + 12345) & 0x7FFFFFFF
             n ^= n >> 13
             ops += 1
         cpu_ops = ops / max(time.perf_counter() - st, 0.001)
-        sz = 512 * 1024
-        try:
-            a, b = bytearray(sz), bytearray(sz)
-            st2 = time.perf_counter()
-            tb = 0
-            deadline2 = st2 + 0.5
-            while time.perf_counter() < deadline2:
-                b[:] = a
-                a[0] = (a[0]+1)%256
-                tb += sz*2
-            mem_mb = (tb/(1024*1024)) / max(time.perf_counter()-st2, 0.001)
-        except:
-            mem_mb = 200.0
-        return cpu_ops, mem_mb
+        return cpu_ops, 300.0
     except:
-        return 50_000_000.0, 200.0
+        return 50000000.0, 300.0
 
 def calc_sensi(info):
     chip_tier = get_tier(info.get("chipset",""))
@@ -593,18 +547,15 @@ class ScanScreen(Screen):
         try:
             cpu_ops, mem_mb = benchmark()
         except:
-            cpu_ops, mem_mb = 50_000_000.0, 200.0
+            cpu_ops, mem_mb = 50000000.0, 300.0
         try:
             self._device_info["cpu_ops"] = cpu_ops
             self._device_info["mem_mb"] = mem_mb
-        except:
-            pass
-        try:
             result = calc_sensi(self._device_info)
         except:
             result = {
-                "sx": {"General":100,"Red Dot":90,"2x Scope":80,
-                       "4x Scope":70,"Sniper":60,"Free Look":95},
+                "sx":{"General":100,"Red Dot":90,"2x Scope":80,
+                      "4x Scope":70,"Sniper":60,"Free Look":95},
                 "tier":"mid","perf":50.0,"hs":False,"lat":8.3
             }
         Clock.schedule_once(lambda dt: self._show_result(result))
