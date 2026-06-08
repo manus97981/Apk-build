@@ -606,15 +606,16 @@ class ResultScreen(Screen):
                            padding=[dp(20), dp(12)])
         with header.canvas.before:
             Color(*BG2)
-            Rectangle(pos=header.pos, size=header.size)
+            self.header_rect = Rectangle(pos=header.pos, size=header.size)
             Color(*tc, 0.5)
-            Line(points=[0,0,0,0], width=1.5)
+            self.header_line = Line(points=[0, 0, 0, 0], width=1.5)
 
         def upd_hdr(w, *a):
-            header.canvas.before.children[1].pos = w.pos
-            header.canvas.before.children[1].size = w.size
-            x,y = w.pos
-            header.canvas.before.children[3].points = [x,y,x+w.width,y]
+            self.header_rect.pos = w.pos
+            self.header_rect.size = w.size
+            x, y = w.pos
+            self.header_line.points = [x, y, x + w.width, y]
+
         header.bind(pos=upd_hdr, size=upd_hdr)
 
         title = Label(text="PRIME SHANI", font_size=sp(22), bold=True,
@@ -665,21 +666,40 @@ class ResultScreen(Screen):
         report_box = BoxLayout(size_hint_y=None, padding=[dp(12),dp(10)])
         with report_box.canvas.before:
             Color(0,0,0,1)
-            RoundedRectangle(pos=report_box.pos, size=report_box.size, radius=[dp(6)])
+            self.report_rect = RoundedRectangle(
+                pos=report_box.pos,
+                size=report_box.size,
+                radius=[dp(6)]
+            )
             Color(*ACCENT, 0.15)
-            Line(rounded_rectangle=[*report_box.pos,*report_box.size,dp(6)], width=1)
-        report_box.bind(
-            pos=lambda i,v: [setattr(i.canvas.before.children[1],"pos",v),
-                              setattr(i.canvas.before.children[3],"rounded_rectangle",[*v,*i.size,dp(6)])],
-            size=lambda i,v: [setattr(i.canvas.before.children[1],"size",v),
-                               setattr(i.canvas.before.children[3],"rounded_rectangle",[*i.pos,*v,dp(6)])]
-        )
+            self.report_line = Line(
+                rounded_rectangle=[
+                    report_box.x,
+                    report_box.y,
+                    report_box.width,
+                    report_box.height,
+                    dp(6)
+                ],
+                width=1
+            )
+
+        def update_report_box(widget, *args):
+            self.report_rect.pos = widget.pos
+            self.report_rect.size = widget.size
+            self.report_line.rounded_rectangle = [
+                widget.x,
+                widget.y,
+                widget.width,
+                widget.height,
+                dp(6)
+            ]
+
+        report_box.bind(pos=update_report_box, size=update_report_box)
         rl = Label(text=report, font_size=sp(10), color=C("#7ecfb0"),
                    halign="left", valign="top",
                    size_hint_y=None)
         rl.bind(texture_size=lambda i,v: setattr(i,"height",v[1]+dp(10)))
         rl.bind(width=lambda i,v: setattr(i,"text_size",(v,None)))
-        report_box.bind(minimum_height=report_box.setter("height"))
         report_box.add_widget(rl)
         content.add_widget(report_box)
 
