@@ -213,125 +213,213 @@ def get_tier(chip):
             best = v
     return best
 
-def benchmark():
-    # ── CPU benchmark (matches original z_run.py: 2s x 3 runs) ──────────
-    try:
-        cpu_samples = []
-        for _ in range(3):
-            st = time.perf_counter()
-            n, ops = 123456789, 0
-            deadline = st + 2.0
-            while time.perf_counter() < deadline:
-                n = (n * 1103515245 + 12345) & 0x7FFFFFFF
-                n ^= n >> 13
-                ops += 1
-            cpu_samples.append(ops / max(time.perf_counter() - st, 0.001))
-        cpu_ops = sum(cpu_samples) / len(cpu_samples)
-    except:
-        cpu_ops = 50_000_000.0
+# ── Sensitivity Engine — direct port of z_run.py / x9k/ ──────────────────
 
-    # ── Memory bandwidth benchmark (matches original z_run.py) ──────────
+# -- p4r.py constants --
+_R1 = 120_000_000.0   # CPU ops reference
+_R2 = 800.0           # mem MB/s reference
+_R3 = 2_500_000.0     # gfx ops reference
+
+def _read_cpu_max_freq_mhz():
+    """_b5() from p4r.py — read max CPU freq from kernel sysfs."""
+    mx = 0.0
     try:
-        sz = 4 * 1024 * 1024
+        base = "/sys/devices/system/cpu"
+        for nm in os.listdir(base):
+            if not nm.startswith("cpu") or not nm[3:].isdigit():
+                continue
+            pt = f"{base}/{nm}/cpufreq/cpuinfo_max_freq"
+            try:
+                with open(pt, encoding="utf-8") as f:
+                    mx = max(mx, int(f.read().strip()) / 1000.0)  # kHz->MHz
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
+    return mx
+
+def _bench_cpu(secs):
+    """_b1() from p4r.py — integer hash loop."""
+    st = time.perf_counter()
+    dl = st + secs
+    n, ops = 123456789, 0
+    while time.perf_counter() < dl:
+        n = (n * 1103515245 + 12345) & 0x7FFFFFFF
+        n ^= n >> 13
+        ops += 1
+    return ops / max(time.perf_counter() - st, 0.001)
+
+def _bench_mem(secs):
+    """_b2() from p4r.py — memory copy bandwidth."""
+    sz = 4 * 1024 * 1024
+    try:
         a, b = bytearray(sz), bytearray(sz)
-        st = time.perf_counter()
-        deadline = st + 1.2
-        total_bytes = 0
-        while time.perf_counter() < deadline:
-            b[:] = a
-            a[0] = (a[0] + 1) % 256
-            total_bytes += sz * 2
-        mem_mb = (total_bytes / (1024 * 1024)) / max(time.perf_counter() - st, 0.001)
-    except:
-        mem_mb = 300.0
+    except MemoryError:
+        return 0.0
+    st = time.perf_counter()
+    dl = st + secs
+    tb = 0
+    while time.perf_counter() < dl:
+        b[:] = a
+        a[0] = (a[0] + 1) % 256
+        tb += sz * 2
+    return (tb / (1024 * 1024)) / max(time.perf_counter() - dl + secs, 0.001)
 
-    return cpu_ops, mem_mb
+def _bench_gfx(secs):
+    """_b3() from p4r.py — floating-point sqrt loop."""
+    st = time.perf_counter()
+    dl = st + secs
+    acc = 0.0
+    while time.perf_counter() < dl:
+        for i in range(64):
+            acc += (i * 1.41421356) ** 0.5
+    return acc / max(time.perf_counter() - st, 0.001)
+
+def _hw_state_score(touch, hz, battery, load):
+    """_b8() from p4r.py — hardware state bonus (0-100)."""
+    s = 50.0
+    if touch >= 240:   s += 18
+    elif touch >= 120: s += 10
+    if hz >= 120: s += 8
+    if battery >= 50:  s += 5
+    if battery < 20:   s -= 12
+    if load > 4.0:     s -= 10
+    elif load > 2.5:   s -= 5
+    return max(0.0, min(100.0, s))
+
+def _perf_score(cpu, mem, gfx, cpu_count, cpu_mhz, gp, batt_bonus):
+    """_x0() from p4r.py — composite performance index."""
+    cs = min(100.0, (cpu / _R1) * 100.0)
+    ms = min(100.0, (mem / _R2) * 100.0)
+    gs = min(100.0, (gfx / _R3) * 100.0)
+    cb = min(12.0, max(0, (cpu_count - 4) * 2.5))
+    mb = min(15.0, (cpu_mhz - 1500) / 50.0) if cpu_mhz > 0 else 0.0
+    return min(100.0, cs*0.42 + ms*0.22 + gs*0.12 + cb + mb + gp*0.18 + batt_bonus*0.06)
+
+def benchmark():
+    """Run all three benchmarks matching z_run.py default params:
+    CPU 2.0s x3, Mem 1.2s x1, GFX 0.9s x1, throttle-check 0.7s x1."""
+    # CPU — 3 runs, averaged
+    ca = [_bench_cpu(2.0) for _ in range(3)]
+    cpu = sum(ca) / len(ca)
+
+    # Memory — 1 run
+    mem = _bench_mem(1.2)
+
+    # GFX — 1 run
+    gfx = _bench_gfx(0.9)
+
+    # Throttle check (same as p4r.py _th detection)
+    c2 = _bench_cpu(0.7)
+    throttled = c2 < cpu * 0.72
+
+    return cpu, mem, gfx, throttled
 
 def calc_sensi(info):
-    chip_tier = get_tier(info.get("chipset",""))
-    ram = info.get("ram", 4)
-    hz = info.get("hz", 60)
-    touch = info.get("touch", 120)
+    chip_tier = get_tier(info.get("chipset", ""))
+    ram     = info.get("ram", 4)
+    hz      = info.get("hz", 60)
+    touch   = info.get("touch", 120)
     battery = info.get("battery", 80)
-    load = info.get("load", 1.0)
-    resW = info.get("w", 1080)
-    resH = info.get("h", 2400)
-    dpi = info.get("dpi", 400)
-    cpu_ops = info.get("cpu_ops", 0)
-    mem_mb = info.get("mem_mb", 0)
+    load    = info.get("load", 1.0)
+    resW    = info.get("w", 1080)
+    resH    = info.get("h", 2400)
+    dpi     = info.get("dpi", 400)
+    cpu     = info.get("cpu_ops", 0.0)
+    mem     = info.get("mem_mb", 0.0)
+    gfx     = info.get("gfx_ops", 0.0)
+    throttled = info.get("throttled", False)
 
-    # Performance score
-    R1, R2 = 120_000_000.0, 800.0
-    cs = min(100, (cpu_ops/R1)*100) if cpu_ops > 0 else 40
-    ms = min(100, (mem_mb/R2)*100) if mem_mb > 0 else 40
-    tier_base_score = {"budget":28,"mid":48,"upper_mid":68,"flagship":84}
-    gp = tier_base_score.get(chip_tier, 48)
-    if ram >= 12: gp += 12
-    elif ram >= 8: gp += 7
-    elif ram >= 6: gp += 3
-    elif ram < 4: gp -= 8
-    if touch >= 240: gp += 10
-    elif touch >= 120: gp += 5
-    if hz >= 120: gp += 6
-    elif hz >= 90: gp += 3
-    if battery >= 50: gp += 4
-    if battery < 20: gp -= 10
-    if load > 4: gp -= 8
-    elif load > 2.5: gp -= 4
-    perf = max(0, min(100, cs*0.42 + ms*0.22 + gp*0.36))
+    cpu_count = os.cpu_count() or 1
+    cpu_mhz   = _read_cpu_max_freq_mhz()
 
-    # Sensitivity base
-    tb = {"budget":98,"mid":122,"upper_mid":148,"flagship":175}.get(chip_tier,122)
-    base = tb + (perf - 50) * 0.92
-    hz_bonus = {60:0,90:9,120:16,144:20}.get(hz,0)
-    base += hz_bonus
+    # _b8 hardware state score
+    gp = _hw_state_score(touch, hz, battery, load)
 
-    # Screen
+    # battery boost (_gb in p4r.py)
+    batt_bonus = 8.0 if battery >= 40 and load < 2.0 else 0.0
+
+    # composite perf index (_x0)
+    ix = _perf_score(cpu, mem, gfx, cpu_count, cpu_mhz, gp, batt_bonus)
+
+    # throttle penalty
+    if throttled:
+        ix *= 0.9
+
+    ix = round(ix, 1)
+
+    # latency
+    lat = round(max(4.0, 1000.0 / touch) if touch > 0 else 16.0, 2)
+
+    # ── _g0() — sensitivity base ─────────────────────────────────────────
+    tier_base = {"budget": 98, "mid": 122, "upper_mid": 148, "flagship": 175}
+    base = tier_base.get(chip_tier, 122)
+    base += (ix - 50) * 0.92
+    base += {60: 0, 90: 9, 120: 16, 144: 20}.get(hz, 0)
+
+    # screen diagonal
     if resW > 0 and resH > 0:
-        dg = (resW**2 + resH**2)**0.5
-        df = (dpi or 400)/400
-        if dg >= 2600: base -= 10
+        dg = (resW**2 + resH**2) ** 0.5
+        df = (dpi or 400) / 400.0
+        if dg >= 2600:   base -= 10
         elif dg >= 2350: base -= 5
-        elif dg < 2000: base += 5
+        elif dg < 2000:  base += 5
         base -= (df - 1.0) * 11
 
     # RAM
-    if ram < 4: base -= 14
-    elif ram < 6: base -= 7
+    if ram < 4:    base -= 14
+    elif ram < 6:  base -= 7
     elif ram >= 12: base += 8
 
-    # Latency
-    lat = max(4.0, 1000/touch) if touch > 0 else 16.0
-    if 0 < lat < 8: base += 6
-    elif lat > 12: base -= 4
+    # throttle
+    if throttled: base -= 9
 
-    # Battery boost
-    if battery >= 40 and load < 2.0: base += 8*0.35
+    # CPU max freq bonus
+    if cpu_mhz > 2800:         base += 7
+    elif 0 < cpu_mhz < 1800:   base -= 7
 
-    # HS mode
-    hs = 0
-    if perf >= 55 and chip_tier in ("upper_mid","flagship"): hs += 6
-    if 0 < lat <= 10: hs += 4
-    if hz >= 90: hs += 3
+    # latency
+    if 0 < lat < 8.0:  base += 6
+    elif lat > 12.0:   base -= 4
+
+    # battery boost
+    base += batt_bonus * 0.35
+
+    # hardware state contribution
+    base += gp * 0.12
+
+    # ── _h0() — HS mode bonus ─────────────────────────────────────────────
+    hs_pts = 0
+    if ix >= 55 and chip_tier in ("upper_mid", "flagship"): hs_pts += 6
+    if 0 < lat <= 10:  hs_pts += 4
+    if hz >= 90:       hs_pts += 3
 
     def cl(v): return max(1, min(200, int(round(v))))
 
-    g = cl(base + hs)
+    g = cl(base + hs_pts)
+    rd  = cl(min(g * 0.91, g - 6))
+    x2  = cl(min(g * 0.83, rd - 9))
+    x4  = cl(min(g * 0.73, x2 - 11))
+    sn  = cl(min(g * 0.67, x4 - 9))
+    fl  = cl(max(g * 0.94, g - 14))
+
+    if ix >= 60:
+        rd = cl(min(rd + 2, g - 4))
+
     sx = {
-        "General": g,
-        "Red Dot": cl(min(g*0.91, g-6)),
-        "2x Scope": cl(min(g*0.83, cl(min(g*0.91,g-6))-9)),
-        "4x Scope": cl(min(g*0.73, cl(min(g*0.83, cl(min(g*0.91,g-6))-9))-11)),
-        "Sniper":   cl(min(g*0.67, cl(min(g*0.73, cl(min(g*0.83, cl(min(g*0.91,g-6))-9))-11))-9)),
-        "Free Look":cl(max(g*0.94, g-14)),
+        "General":  g,
+        "Red Dot":  rd,
+        "2x Scope": x2,
+        "4x Scope": x4,
+        "Sniper":   sn,
+        "Free Look": fl,
     }
-    if perf >= 60:
-        sx["Red Dot"] = cl(min(sx["Red Dot"]+2, g-4))
 
     return {
-        "sx": sx, "tier": chip_tier, "perf": round(perf,1),
-        "hs": hs > 0, "lat": round(lat,1),
+        "sx": sx, "tier": chip_tier, "perf": ix,
+        "hs": hs_pts > 0, "lat": lat,
     }
+
 
 # ── UI Components ──────────────────────────────────────────────────────────
 
@@ -610,17 +698,19 @@ class ScanScreen(Screen):
             return
         self._btn.scanning = True
         self._btn.text = "  BENCHMARKING..."
-        self._status.text = "// RUNNING CPU & RAM BENCHMARK..."
+        self._status.text = "// RUNNING CPU · MEM · GFX BENCHMARK (~8s)..."
         threading.Thread(target=self._scan_thread, daemon=True).start()
 
     def _scan_thread(self):
         try:
-            cpu_ops, mem_mb = benchmark()
+            cpu_ops, mem_mb, gfx_ops, throttled = benchmark()
         except:
-            cpu_ops, mem_mb = 50000000.0, 300.0
+            cpu_ops, mem_mb, gfx_ops, throttled = 50_000_000.0, 300.0, 0.0, False
         try:
-            self._device_info["cpu_ops"] = cpu_ops
-            self._device_info["mem_mb"] = mem_mb
+            self._device_info["cpu_ops"]  = cpu_ops
+            self._device_info["mem_mb"]   = mem_mb
+            self._device_info["gfx_ops"]  = gfx_ops
+            self._device_info["throttled"] = throttled
             result = calc_sensi(self._device_info)
         except:
             result = {
