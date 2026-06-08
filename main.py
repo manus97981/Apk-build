@@ -38,16 +38,55 @@ Window.clearcolor = BG
 
 # ── Sensitivity Engine ─────────────────────────────────────────────────────
 TIER_DB = {
+    # ── Qualcomm Snapdragon ──────────────────────────────────────────────
     "snapdragon 8 gen 3":"flagship","snapdragon 8 gen 2":"flagship",
     "snapdragon 8+ gen 1":"flagship","snapdragon 8 gen 1":"flagship",
-    "snapdragon 888":"flagship","dimensity 9300":"flagship","dimensity 9200":"flagship",
-    "dimensity 8300":"upper_mid","snapdragon 7+ gen 3":"upper_mid",
-    "snapdragon 7+ gen 2":"upper_mid","snapdragon 782g":"upper_mid",
-    "dimensity 7200":"upper_mid","snapdragon 7s gen 2":"upper_mid",
-    "snapdragon 695":"mid","snapdragon 680":"mid","snapdragon 685":"mid",
-    "helio g99":"mid","helio g96":"mid","helio g91":"mid","helio g88":"mid",
-    "helio g85":"budget","helio g36":"budget","helio g25":"budget",
-    "unisoc":"budget","tiger t":"budget",
+    "snapdragon 888":"flagship","snapdragon 870":"flagship",
+    "snapdragon 865":"flagship","snapdragon 860":"flagship",
+    "snapdragon 7+ gen 3":"upper_mid","snapdragon 7+ gen 2":"upper_mid",
+    "snapdragon 7 gen 3":"upper_mid","snapdragon 7 gen 1":"upper_mid",
+    "snapdragon 782g":"upper_mid","snapdragon 778g":"upper_mid",
+    "snapdragon 7s gen 2":"upper_mid","snapdragon 750g":"upper_mid",
+    "snapdragon 695":"mid","snapdragon 690":"mid",
+    "snapdragon 680":"mid","snapdragon 685":"mid","snapdragon 662":"mid",
+    "snapdragon 4 gen 2":"mid","snapdragon 4 gen 1":"mid",
+    "snapdragon 480":"mid","snapdragon 460":"budget",
+    "snapdragon 439":"budget","snapdragon 435":"budget",
+    # ── MediaTek Dimensity ───────────────────────────────────────────────
+    "dimensity 9300":"flagship","dimensity 9200":"flagship",
+    "dimensity 9000":"flagship","dimensity 8300":"upper_mid",
+    "dimensity 8200":"upper_mid","dimensity 8100":"upper_mid",
+    "dimensity 8050":"upper_mid","dimensity 8020":"upper_mid",
+    "dimensity 7300":"upper_mid","dimensity 7200":"upper_mid",
+    "dimensity 7050":"upper_mid","dimensity 7020":"upper_mid",
+    "dimensity 1300":"upper_mid","dimensity 1200":"upper_mid",
+    "dimensity 1100":"upper_mid","dimensity 1080":"upper_mid",
+    "dimensity 1050":"upper_mid","dimensity 1000":"upper_mid",
+    "dimensity 930":"mid","dimensity 920":"mid",
+    "dimensity 810":"mid","dimensity 800":"mid",
+    "dimensity 700":"mid","dimensity 6300":"mid","dimensity 6100":"mid",
+    # ── MediaTek SoC codenames (used in /proc/cpuinfo & ro.hardware) ─────
+    "mt6989":"flagship","mt6985":"flagship","mt6983":"flagship",
+    "mt6895":"upper_mid","mt6893":"upper_mid","mt6891":"upper_mid",
+    "mt6877":"upper_mid","mt6875":"upper_mid","mt6873":"upper_mid",
+    "mt6789":"upper_mid",   # Dimensity 1080 — Samsung SM-A155F
+    "mt6769":"mid","mt6768":"mid","mt6765":"mid","mt6762":"mid",
+    "mt6761":"budget","mt6739":"budget","mt6737":"budget",
+    # ── MediaTek Helio ───────────────────────────────────────────────────
+    "helio g99":"mid","helio g96":"mid","helio g91":"mid",
+    "helio g88":"mid","helio g85":"budget","helio g80":"budget",
+    "helio g36":"budget","helio g25":"budget","helio p95":"mid",
+    "helio p90":"mid","helio p70":"mid","helio p60":"budget",
+    # ── Other ────────────────────────────────────────────────────────────
+    "kirin 9000":"flagship","kirin 990":"flagship","kirin 985":"upper_mid",
+    "kirin 980":"flagship","kirin 970":"upper_mid","kirin 820":"upper_mid",
+    "kirin 810":"upper_mid","kirin 710":"mid","kirin 710a":"mid",
+    "exynos 2400":"flagship","exynos 2300":"flagship","exynos 2200":"flagship",
+    "exynos 1380":"upper_mid","exynos 1280":"upper_mid","exynos 1080":"upper_mid",
+    "exynos 990":"flagship","exynos 980":"upper_mid","exynos 850":"mid",
+    "unisoc t820":"mid","unisoc t760":"mid","unisoc t618":"mid",
+    "unisoc t606":"budget","unisoc t310":"budget","unisoc":"budget",
+    "tiger t":"budget",
 }
 
 def _getprop(k):
@@ -71,15 +110,27 @@ def detect_device():
     model = _getprop("ro.product.model")
     info["device"] = f"{brand} {model}".strip() if brand else (model or platform.node() or "Unknown")
 
-    # Chipset from cpuinfo
-    cpuinfo = _read_file("/proc/cpuinfo")
+    # Chipset — try multiple sources so MediaTek codenames are found
     hw = ""
-    for line in cpuinfo.splitlines():
-        if "Hardware" in line or "model name" in line or "Processor" in line:
-            hw = line.split(":")[-1].strip()
-            break
+    # 1) getprop gives the clearest name on most devices
+    hw = (_getprop("ro.hardware.chipname")
+          or _getprop("ro.chipname")
+          or _getprop("ro.hardware")
+          or _getprop("ro.product.board")
+          or "")
+    # 2) Fall back to /proc/cpuinfo Hardware / model name line
+    if not hw or hw.lower() in ("unknown", ""):
+        cpuinfo = _read_file("/proc/cpuinfo")
+        for line in cpuinfo.splitlines():
+            if "Hardware" in line or "model name" in line or "Processor" in line:
+                hw = line.split(":")[-1].strip()
+                break
+    # 3) Last resort — SoC device-tree node
+    if not hw or hw.lower() in ("unknown", ""):
+        compat = _read_file("/sys/firmware/devicetree/base/compatible")
+        hw = compat.split("\x00")[0] if compat else ""
     if not hw:
-        hw = _getprop("ro.hardware") or _getprop("ro.product.board") or "Unknown"
+        hw = "Unknown"
     info["chipset"] = hw
 
     # RAM
@@ -163,19 +214,38 @@ def get_tier(chip):
     return best
 
 def benchmark():
-    # CPU only — no memory alloc to avoid Android crash
+    # ── CPU benchmark (matches original z_run.py: 2s x 3 runs) ──────────
     try:
-        st = time.perf_counter()
-        n, ops = 123456789, 0
-        deadline = st + 0.8
-        while time.perf_counter() < deadline:
-            n = (n * 1103515245 + 12345) & 0x7FFFFFFF
-            n ^= n >> 13
-            ops += 1
-        cpu_ops = ops / max(time.perf_counter() - st, 0.001)
-        return cpu_ops, 300.0
+        cpu_samples = []
+        for _ in range(3):
+            st = time.perf_counter()
+            n, ops = 123456789, 0
+            deadline = st + 2.0
+            while time.perf_counter() < deadline:
+                n = (n * 1103515245 + 12345) & 0x7FFFFFFF
+                n ^= n >> 13
+                ops += 1
+            cpu_samples.append(ops / max(time.perf_counter() - st, 0.001))
+        cpu_ops = sum(cpu_samples) / len(cpu_samples)
     except:
-        return 50000000.0, 300.0
+        cpu_ops = 50_000_000.0
+
+    # ── Memory bandwidth benchmark (matches original z_run.py) ──────────
+    try:
+        sz = 4 * 1024 * 1024
+        a, b = bytearray(sz), bytearray(sz)
+        st = time.perf_counter()
+        deadline = st + 1.2
+        total_bytes = 0
+        while time.perf_counter() < deadline:
+            b[:] = a
+            a[0] = (a[0] + 1) % 256
+            total_bytes += sz * 2
+        mem_mb = (total_bytes / (1024 * 1024)) / max(time.perf_counter() - st, 0.001)
+    except:
+        mem_mb = 300.0
+
+    return cpu_ops, mem_mb
 
 def calc_sensi(info):
     chip_tier = get_tier(info.get("chipset",""))
